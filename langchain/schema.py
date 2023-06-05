@@ -245,6 +245,8 @@ class BaseChatMessageHistory(ABC):
     """
 
     messages: List[BaseMessage]
+    async_mode: Optional[bool] = False
+    direct_io_mode: Optional[bool] = True
 
     def add_user_message(self, message: str) -> None:
         """Add a user message to the store"""
@@ -261,6 +263,61 @@ class BaseChatMessageHistory(ABC):
     @abstractmethod
     def clear(self) -> None:
         """Remove all messages from the store"""
+
+    def setup(self) -> None:
+        """Setup the store."""
+        pass
+
+    def sync(self) -> None:
+        """Sync the store to the underlying storage."""
+        raise NotImplementedError
+
+    def __enter__(self) -> "BaseChatMessageHistory":
+        """Enter context"""
+        if self.async_mode:
+            raise ValueError(
+                "Cannot enter context in sync mode, use aenter or async with."
+            )
+        self.setup()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        """Exit context"""
+        self.sync()
+
+    async def aadd_user_message(self, message: str) -> None:
+        """Add a user message to the store"""
+        await self.aadd_message(HumanMessage(content=message))
+
+    async def aadd_ai_message(self, message: str) -> None:
+        """Add an AI message to the store"""
+        await self.aadd_message(AIMessage(content=message))
+
+    async def aadd_message(self, message: BaseMessage) -> None:
+        """Add a self-created message to the store"""
+        raise NotImplementedError
+
+    async def aclear(self) -> None:
+        """Remove all messages from the store"""
+
+    async def asetup(self) -> None:
+        """Setup the store"""
+        pass
+
+    async def a_sync(self) -> None:
+        """Sync the store to the underlying storage."""
+        pass
+
+    async def __aenter__(self) -> "BaseChatMessageHistory":
+        """Async enter context"""
+        if not self.async_mode:
+            raise ValueError("Cannot aenter context in async mode, use enter or with.")
+        await self.asetup()
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        """Async exit context"""
+        await self.a_sync()
 
 
 class Document(BaseModel):
