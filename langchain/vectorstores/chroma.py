@@ -50,7 +50,7 @@ class Chroma(VectorStore):
                 from langchain.embeddings.openai import OpenAIEmbeddings
 
                 embeddings = OpenAIEmbeddings()
-                vectorstore = Chroma("langchain_store", embeddings.embed_query)
+                vectorstore = Chroma("langchain_store", embeddings)
     """
 
     _LANGCHAIN_DEFAULT_COLLECTION_NAME = "langchain"
@@ -109,29 +109,18 @@ class Chroma(VectorStore):
     ) -> List[Document]:
         """Query the chroma collection."""
         try:
-            import chromadb
+            import chromadb  # noqa: F401
         except ImportError:
             raise ValueError(
                 "Could not import chromadb python package. "
                 "Please install it with `pip install chromadb`."
             )
-
-        for i in range(n_results, 0, -1):
-            try:
-                return self._collection.query(
-                    query_texts=query_texts,
-                    query_embeddings=query_embeddings,
-                    n_results=i,
-                    where=where,
-                    **kwargs,
-                )
-            except chromadb.errors.NotEnoughElementsException:
-                logger.error(
-                    f"Chroma collection {self._collection.name} "
-                    f"contains fewer than {i} elements."
-                )
-        raise chromadb.errors.NotEnoughElementsException(
-            f"No documents found for Chroma collection {self._collection.name}"
+        return self._collection.query(
+            query_texts=query_texts,
+            query_embeddings=query_embeddings,
+            n_results=n_results,
+            where=where,
+            **kwargs,
         )
 
     def add_texts(
@@ -217,8 +206,9 @@ class Chroma(VectorStore):
             filter (Optional[Dict[str, str]]): Filter by metadata. Defaults to None.
 
         Returns:
-            List[Tuple[Document, float]]: List of documents most similar to the query
-                text with distance in float.
+            List[Tuple[Document, float]]: List of documents most similar to
+            the query text and cosine distance in float for each.
+            Lower score represents more similarity.
         """
         if self._embedding_function is None:
             results = self.__query_collection(

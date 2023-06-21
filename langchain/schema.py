@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
@@ -13,8 +14,13 @@ from typing import (
     TypeVar,
     Union,
 )
+from uuid import UUID
 
-from pydantic import BaseModel, Extra, Field, root_validator
+from pydantic import BaseModel, Field, root_validator
+
+from langchain.load.serializable import Serializable
+
+RUN_KEY = "__run"
 
 
 def get_buffer_string(
@@ -29,15 +35,22 @@ def get_buffer_string(
             role = ai_prefix
         elif isinstance(m, SystemMessage):
             role = "System"
+        elif isinstance(m, FunctionMessage):
+            role = "Function"
         elif isinstance(m, ChatMessage):
             role = m.role
         else:
             raise ValueError(f"Got unsupported message type: {m}")
-        string_messages.append(f"{role}: {m.content}")
+        message = f"{role}: {m.content}"
+        if isinstance(m, AIMessage) and "function_call" in m.additional_kwargs:
+            message += f"{m.additional_kwargs['function_call']}"
+        string_messages.append(message)
+
     return "\n".join(string_messages)
 
 
-class AgentAction(NamedTuple):
+@dataclass
+class AgentAction:
     """Agent's action to take."""
 
     tool: str
@@ -52,7 +65,7 @@ class AgentFinish(NamedTuple):
     log: str
 
 
-class Generation(BaseModel):
+class Generation(Serializable):
     """Output of a single generation."""
 
     text: str
@@ -64,7 +77,7 @@ class Generation(BaseModel):
     # TODO: add log probs
 
 
-class BaseMessage(BaseModel):
+class BaseMessage(Serializable):
     """Message object."""
 
     content: str
@@ -105,6 +118,15 @@ class SystemMessage(BaseMessage):
     def type(self) -> str:
         """Type of the message, used for serialization."""
         return "system"
+
+
+class FunctionMessage(BaseMessage):
+    name: str
+
+    @property
+    def type(self) -> str:
+        """Type of the message, used for serialization."""
+        return "function"
 
 
 class ChatMessage(BaseMessage):
@@ -156,6 +178,12 @@ class ChatGeneration(Generation):
         return values
 
 
+class RunInfo(BaseModel):
+    """Class that contains all relevant metadata for a Run."""
+
+    run_id: UUID
+
+
 class ChatResult(BaseModel):
     """Class that contains all relevant information for a Chat Result."""
 
@@ -173,9 +201,19 @@ class LLMResult(BaseModel):
     each input could have multiple generations."""
     llm_output: Optional[dict] = None
     """For arbitrary LLM provider specific output."""
+    run: Optional[RunInfo] = None
+    """Run metadata."""
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, LLMResult):
+            return NotImplemented
+        return (
+            self.generations == other.generations
+            and self.llm_output == other.llm_output
+        )
 
 
-class PromptValue(BaseModel, ABC):
+class PromptValue(Serializable, ABC):
     @abstractmethod
     def to_string(self) -> str:
         """Return prompt as string."""
@@ -185,13 +223,12 @@ class PromptValue(BaseModel, ABC):
         """Return prompt as messages."""
 
 
-class BaseMemory(BaseModel, ABC):
+class BaseMemory(Serializable, ABC):
     """Base interface for memory in chains."""
 
     class Config:
         """Configuration for this pydantic object."""
 
-        extra = Extra.forbid
         arbitrary_types_allowed = True
 
     @property
@@ -320,7 +357,7 @@ class BaseChatMessageHistory(ABC):
         await self.a_sync()
 
 
-class Document(BaseModel):
+class Document(Serializable):
     """Interface for interacting with a document."""
 
     page_content: str
@@ -359,11 +396,20 @@ Memory = BaseMemory
 T = TypeVar("T")
 
 
-class BaseOutputParser(BaseModel, ABC, Generic[T]):
+class BaseLLMOutputParser(Serializable, ABC, Generic[T]):
+    @abstractmethod
+    def parse_result(self, result: List[Generation]) -> T:
+        """Parse LLM Result."""
+
+
+class BaseOutputParser(BaseLLMOutputParser, ABC, Generic[T]):
     """Class to parse the output of an LLM call.
 
     Output parsers help structure language model responses.
     """
+
+    def parse_result(self, result: List[Generation]) -> T:
+        return self.parse(result[0].text)
 
     @abstractmethod
     def parse(self, text: str) -> T:
@@ -412,6 +458,21 @@ class BaseOutputParser(BaseModel, ABC, Generic[T]):
         output_parser_dict = super().dict()
         output_parser_dict["_type"] = self._type
         return output_parser_dict
+
+
+class NoOpOutputParser(BaseOutputParser[str]):
+    """Output parser that just returns the text as is."""
+
+    @property
+    def lc_serializable(self) -> bool:
+        return True
+
+    @property
+    def _type(self) -> str:
+        return "default"
+
+    def parse(self, text: str) -> str:
+        return text
 
 
 class OutputParserException(ValueError):
