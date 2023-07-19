@@ -180,6 +180,7 @@ class SQLAlchemyCache(BaseCache):
         """Clear cache."""
         with Session(self.engine) as session:
             session.query(self.cache_schema).delete()
+            session.commit()
 
 
 class SQLiteCache(SQLAlchemyCache):
@@ -262,7 +263,9 @@ class RedisSemanticCache(BaseCache):
             score_threshold (float, 0.2):
 
         Example:
+
         .. code-block:: python
+
             import langchain
 
             from langchain.cache import RedisSemanticCache
